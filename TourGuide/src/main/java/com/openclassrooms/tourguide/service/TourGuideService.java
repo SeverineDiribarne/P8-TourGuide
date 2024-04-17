@@ -94,17 +94,33 @@ public class TourGuideService {
 		rewardsService.calculateRewards(user);
 		return visitedLocation;
 	}
-
-	public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
+//old method
+/*	public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
 		List<Attraction> nearbyAttractions = new ArrayList<>();
 		for (Attraction attraction : gpsUtil.getAttractions()) {
 			if (rewardsService.isWithinAttractionProximity(attraction, visitedLocation.location)) {
 				nearbyAttractions.add(attraction);
 			}
 		}
-
 		return nearbyAttractions;
-	}
+	} */
+
+//new method
+public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
+	HashMap<Attraction, Double> attractionToDistance = new HashMap<>();
+	gpsUtil.getAttractions().forEach((attraction) -> {
+		double distance = rewardsService.getDistance(attraction, visitedLocation.location);
+		attractionToDistance.put(attraction, distance);
+	});
+
+	List<Attraction> nearbyAttractions = new ArrayList<>();
+	attractionToDistance.entrySet().stream()
+			.sorted(Map.Entry.comparingByValue())
+			.limit(5) // Limiter à 5 attractions
+			.forEach(entry -> nearbyAttractions.add(entry.getKey()));
+
+	return nearbyAttractions;
+}
 
 	private void addShutDownHook() {
 		Runtime.getRuntime().addShutdownHook(new Thread() {
