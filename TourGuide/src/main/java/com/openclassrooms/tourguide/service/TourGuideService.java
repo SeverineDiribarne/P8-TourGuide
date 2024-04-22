@@ -2,8 +2,8 @@ package com.openclassrooms.tourguide.service;
 
 import com.openclassrooms.tourguide.helper.InternalTestHelper;
 import com.openclassrooms.tourguide.tracker.Tracker;
-import com.openclassrooms.tourguide.user.User;
-import com.openclassrooms.tourguide.user.UserReward;
+import com.openclassrooms.tourguide.model.user.user.User;
+import com.openclassrooms.tourguide.model.user.user.UserReward;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
