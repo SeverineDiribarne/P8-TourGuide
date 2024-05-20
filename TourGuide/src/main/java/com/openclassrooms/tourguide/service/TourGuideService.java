@@ -15,7 +15,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -39,6 +40,10 @@ public class TourGuideService {
     private final TripPricer tripPricer = new TripPricer();
     public final Tracker tracker;
     boolean testMode = true;
+    private final ExecutorService executorService = Executors.newFixedThreadPool(100);
+
+    private final Map<String, CompletableFuture<VisitedLocation>> trackUserLocationFutures = new HashMap<>();
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService) {
         this.gpsUtil = gpsUtil;
@@ -61,9 +66,16 @@ public class TourGuideService {
     }
 
     public VisitedLocation getUserLocation(User user) {
-        VisitedLocation visitedLocation = (user.getVisitedLocations().size() > 0) ? user.getLastVisitedLocation()
-                : trackUserLocation(user);
-        return visitedLocation;
+        if (user.getVisitedLocations().isEmpty()) {
+            try {
+                return trackUserLocation(user).get();
+            } catch (InterruptedException | ExecutionException e) {
+                e.printStackTrace();
+                return null;
+            }
+        } else {
+            return user.getLastVisitedLocation();
+        }
     }
 
     public User getUser(String userName) {
@@ -81,20 +93,50 @@ public class TourGuideService {
     }
 
     public List<Provider> getTripDeals(User user) {
-        int cumulatativeRewardPoints = user.getUserRewards().stream().mapToInt(i -> i.getRewardPoints()).sum();
+        int cumulativeRewardPoints = user.getUserRewards().stream().mapToInt(i -> i.getRewardPoints()).sum();
         List<Provider> providers = tripPricer.getPrice(tripPricerApiKey, user.getUserId(),
                 user.getUserPreferences().getNumberOfAdults(), user.getUserPreferences().getNumberOfChildren(),
-                user.getUserPreferences().getTripDuration(), cumulatativeRewardPoints);
+                user.getUserPreferences().getTripDuration(), cumulativeRewardPoints);
         user.setTripDeals(providers);
         return providers;
     }
 
-    public VisitedLocation trackUserLocation(User user) {
-        VisitedLocation visitedLocation = gpsUtil.getUserLocation(user.getUserId());
-        user.addToVisitedLocations(visitedLocation);
-        rewardsService.calculateRewards(user);
-        return visitedLocation;
+    public CompletableFuture<VisitedLocation> trackUserLocation(User user) {
+        boolean exist = false;
+
+        lock.readLock().lock();
+        try {
+            exist = trackUserLocationFutures.containsKey(user.getUserName());
+        } finally {
+            lock.readLock().unlock();
+        }
+        if (exist)
+            return trackUserLocationFutures.get(user.getUserName());
+
+        CompletableFuture<VisitedLocation> trackUserLocationFuture = CompletableFuture.supplyAsync(() -> {
+            VisitedLocation visitedLocation = gpsUtil.getUserLocation(user.getUserId());
+            user.addToVisitedLocations(visitedLocation);
+            rewardsService.calculateRewards(user).join();
+            return visitedLocation;
+        }, executorService);
+
+        lock.writeLock().lock();
+        try {
+            trackUserLocationFutures.put(user.getUserName(), trackUserLocationFuture);
+        } finally {
+            lock.writeLock().unlock();
+        }
+
+        return trackUserLocationFuture;
     }
+
+    public void stopTrackUserLocation() {
+        trackUserLocationFutures
+                .values()
+                .parallelStream()
+                .forEach(CompletableFuture::join);
+    }
+
 //old method
 /*	public List<Attraction> getNearByAttractions(VisitedLocation visitedLocation) {
 		List<Attraction> nearbyAttractions = new ArrayList<>();

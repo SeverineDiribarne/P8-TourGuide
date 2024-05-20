@@ -2,15 +2,12 @@ package com.openclassrooms.tourguide;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 
 import org.apache.commons.lang3.time.StopWatch;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 
 import gpsUtil.GpsUtil;
@@ -62,20 +59,11 @@ public class TestPerformance {
 		StopWatch stopWatch = new StopWatch();
 		stopWatch.start();
 
-		List<CompletableFuture<Void>> futures = new ArrayList<>();
-
 		for (User user : allUsers) {
-			CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-				tourGuideService.trackUserLocation(user);
-			});
-			futures.add(future);
+			tourGuideService.trackUserLocation(user);
 		}
-		CompletableFuture<Void> allOf = CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]));
-        try {
-            allOf.get();
-        } catch (InterruptedException | ExecutionException e) {
-            throw new RuntimeException(e);
-        }
+
+		tourGuideService.stopTrackUserLocation();
         stopWatch.stop();
 		tourGuideService.tracker.stopTracking();
 
@@ -86,7 +74,7 @@ public class TestPerformance {
 
 
 	@Test
-	public void highVolumeGetRewards() {
+	public void highVolumeGetRewards() throws InterruptedException {
 		GpsUtil gpsUtil = new GpsUtil();
 		RewardsService rewardsService = new RewardsService(gpsUtil, new RewardCentral());
 
@@ -99,22 +87,18 @@ public class TestPerformance {
 
 		Attraction attraction = gpsUtil.getAttractions().get(0);
 		List<User> allUsers = tourGuideService.getAllUsers();
-		allUsers.forEach(user -> user.addToVisitedLocations(new VisitedLocation(user.getUserId(), attraction, new Date())));
+		allUsers.forEach(user ->
+		{
+			user.addToVisitedLocations(new VisitedLocation(user.getUserId(), attraction, new Date()));
+			rewardsService.calculateRewards(user);
+		});
+
+		rewardsService
+				.usersWithUserRewardsStream()
+				.forEach( (user) -> assertTrue(user.getUserRewards().size() > 0));
 
 
-		List<CompletableFuture<Void>>completableFutures = new ArrayList<>();
-		for(User user : allUsers){
-			CompletableFuture<Void>future = CompletableFuture.runAsync(() -> rewardsService.calculateRewards(user));
-			completableFutures.add(future);
-		}
-		CompletableFuture<Void> allOfFutures = CompletableFuture.allOf(
-				completableFutures.toArray(new CompletableFuture[0]));
-
-		allOfFutures.join();
-
-		for (User user : allUsers) {
-			assertTrue(user.getUserRewards().size() > 0);
-		}
+		tourGuideService.stopTrackUserLocation();
 		stopWatch.stop();
 		tourGuideService.tracker.stopTracking();
 

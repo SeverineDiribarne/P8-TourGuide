@@ -1,9 +1,9 @@
 package com.openclassrooms.tourguide.service;
 
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.stream.Collectors;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Stream;
 
 import org.springframework.stereotype.Service;
 
@@ -17,6 +17,9 @@ import com.openclassrooms.tourguide.model.user.user.UserReward;
 
 @Service
 public class RewardsService {
+    private final Map<String, CompletableFuture<User>> calculateRewardsFutures = new HashMap<>();
+    private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+
     private static final double STATUTE_MILES_PER_NAUTICAL_MILE = 1.15077945;
 
     // proximity in miles
@@ -25,6 +28,7 @@ public class RewardsService {
     private int attractionProximityRange = 200;
     private final GpsUtil gpsUtil;
     private final RewardCentral rewardsCentral;
+    private final Executor rewardExecutor = Executors.newFixedThreadPool(100);
 
     public RewardsService(GpsUtil gpsUtil, RewardCentral rewardCentral) {
         this.gpsUtil = gpsUtil;
@@ -39,27 +43,84 @@ public class RewardsService {
         proximityBuffer = defaultProximityBuffer;
     }
 
-    public void calculateRewards(User user) {
-        CompletableFuture<List<VisitedLocation>> userLocationFuture = CompletableFuture.supplyAsync(user::getVisitedLocations);
-        CompletableFuture<List<Attraction>> attractionsFuture = CompletableFuture.supplyAsync(gpsUtil::getAttractions);
+    public CompletableFuture<User> calculateRewards(User user) {
+        CompletableFuture<User> producerFuture = null;
 
-        CompletableFuture<Void> allOf = CompletableFuture.allOf(userLocationFuture, attractionsFuture);
-        allOf.thenRun(() -> {
-            List<VisitedLocation> userLocations = userLocationFuture.join();
-            List<Attraction> attractions = attractionsFuture.join();
+        lock.readLock().lock();
+        try {
+            producerFuture = calculateRewardsFutures.get(user.getUserName());
+        } finally {
+            lock.readLock().unlock();
+        }
+        if (producerFuture != null) {
+            return producerFuture;
+        }
 
-            for (VisitedLocation visitedLocation : userLocations) {
-                for (Attraction attraction : attractions) {
-                    if (user.getUserRewards().stream().noneMatch(r -> r.attraction.attractionName.equals(attraction.attractionName))) {
-                        if (nearAttraction(visitedLocation, attraction)) {
-                            int rewardPoints = getRewardPoints(attraction, user);
-                            user.addUserReward(new UserReward(visitedLocation, attraction, rewardPoints));
-                        }
-                    }
-                }
-            }
-        });
-        allOf.join();
+        CompletableFuture<List<VisitedLocation>> userLocationFuture = CompletableFuture.supplyAsync(user::getVisitedLocations, rewardExecutor);
+        CompletableFuture<List<Attraction>> attractionsFuture = CompletableFuture.supplyAsync(gpsUtil::getAttractions, rewardExecutor);
+
+        producerFuture = userLocationFuture.thenCombineAsync(attractionsFuture,
+                (userLocations, attractions) -> {
+                    userLocations
+                            .parallelStream()
+                            .forEach(visitedLocation ->
+                                    {
+                                        attractions
+                                                .parallelStream().
+                                                forEach(attraction ->
+                                                        {
+                                                            if (user.getUserRewards()
+                                                                    .parallelStream()
+                                                                    .noneMatch(r -> r.attraction.attractionName.equals(attraction.attractionName))) {
+                                                                if (nearAttraction(visitedLocation, attraction)) {
+                                                                    int rewardPoints = getRewardPoints(attraction, user);
+                                                                    user.addUserReward(new UserReward(visitedLocation, attraction, rewardPoints));
+                                                                }
+                                                            }
+                                                        }
+                                                );
+                                    }
+                            );
+                    return user;
+                }, rewardExecutor);
+
+        lock.writeLock().lock();
+        try {
+            calculateRewardsFutures.put(user.getUserName(), producerFuture);
+        } finally {
+            lock.writeLock().unlock();
+        }
+        return producerFuture;
+
+//        CompletableFuture<List<VisitedLocation>> userLocationFuture = CompletableFuture.supplyAsync(user::getVisitedLocations);
+//        CompletableFuture<List<Attraction>> attractionsFuture = CompletableFuture.supplyAsync(gpsUtil::getAttractions);
+//
+//    //    CompletableFuture<Void> allOf = CompletableFuture.allOf(userLocationFuture, attractionsFuture);
+//        CompletableFuture<Void> rewardsFuture = CompletableFuture.runAsync(() -> {
+//            List<VisitedLocation> userLocations = userLocationFuture.join();
+//            List<Attraction> attractions = attractionsFuture.join();
+//
+//            for (VisitedLocation visitedLocation : userLocations) {
+//                for (Attraction attraction : attractions) {
+//                    if (user.getUserRewards().stream().noneMatch(r -> r.attraction.attractionName.equals(attraction.attractionName))) {
+//                        if (nearAttraction(visitedLocation, attraction)) {
+//                            int rewardPoints = getRewardPoints(attraction, user);
+//                            user.addUserReward(new UserReward(visitedLocation, attraction, rewardPoints));
+//                        }
+//                    }
+//                }
+//            }
+//        }, rewardExecutor
+//        );
+        // }
+    }
+
+    public Stream<User> usersWithUserRewardsStream() throws InterruptedException {
+        return calculateRewardsFutures
+                .values()
+                .stream()
+                .map(CompletableFuture::join)
+                .parallel();
     }
 
     public boolean isWithinAttractionProximity(Attraction attraction, Location location) {
@@ -87,5 +148,4 @@ public class RewardsService {
         double statuteMiles = STATUTE_MILES_PER_NAUTICAL_MILE * nauticalMiles;
         return statuteMiles;
     }
-
 }
