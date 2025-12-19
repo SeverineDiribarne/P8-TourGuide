@@ -50,8 +50,8 @@ jobs:
       run: mvn package
       working-directory: TourGuide
 
-    - name: Upload build atifacts
-      uses: actions/upload-artifact@v3
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
       with:
         name: build-artifacts
         path: TourGuide/target/*.jar
