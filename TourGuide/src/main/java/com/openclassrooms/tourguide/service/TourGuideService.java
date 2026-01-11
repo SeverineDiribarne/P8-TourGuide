@@ -48,6 +48,10 @@ public class TourGuideService {
 	private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
 	public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService) {
+		this(gpsUtil, rewardsService, true);
+	}
+
+	public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService, boolean startTracker) {
 		this.gpsUtil = gpsUtil;
 		this.rewardsService = rewardsService;
 
@@ -59,7 +63,7 @@ public class TourGuideService {
 			initializeInternalUsers();
 			logger.debug("Finished initializing users");
 		}
-		tracker = new Tracker(this);
+		tracker = new Tracker(this, startTracker);
 		addShutDownHook();
 	}
 

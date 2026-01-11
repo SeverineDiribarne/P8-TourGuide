@@ -1,13 +1,12 @@
 package com.openclassrooms.tourguide.service;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Stream;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.stereotype.Service;
 
@@ -22,7 +21,7 @@ import rewardCentral.RewardCentral;
 
 @Service
 public class RewardsService {
-	private final Map<String, CompletableFuture<User>> calculateRewardsFutures = new HashMap<>();
+	private final ConcurrentHashMap<String, CompletableFuture<User>> calculateRewardsFutures = new ConcurrentHashMap<>();
 	private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
 	private static final double STATUTE_MILES_PER_NAUTICAL_MILE = 1.15077945;
@@ -33,11 +32,33 @@ public class RewardsService {
 	private int attractionProximityRange = 200;
 	private final GpsUtil gpsUtil;
 	private final RewardCentral rewardsCentral;
-	private final Executor rewardExecutor = Executors.newFixedThreadPool(100);
+		private final Executor rewardExecutor = Executors.newFixedThreadPool(100);
+	private volatile List<Attraction> attractionsCache;
+	private final Object attractionsLock = new Object();
 
 	public RewardsService(GpsUtil gpsUtil, RewardCentral rewardCentral) {
 		this.gpsUtil = gpsUtil;
 		this.rewardsCentral = rewardCentral;
+		// Pré-chargement du cache d'attractions pour éviter le coût à la première requête
+		try {
+			this.attractionsCache = gpsUtil.getAttractions();
+		} catch (Exception ignored) {
+			// en cas d'échec, on retombera sur un chargement lazy au premier calcul
+		}
+	}
+
+	private List<Attraction> getAttractionsCached() {
+		List<Attraction> local = attractionsCache;
+		if (local == null) {
+			synchronized (attractionsLock) {
+				local = attractionsCache;
+				if (local == null) {
+					local = gpsUtil.getAttractions();
+					attractionsCache = local;
+				}
+			}
+		}
+		return local;
 	}
 
 	public void setProximityBuffer(int proximityBuffer) {
@@ -49,53 +70,28 @@ public class RewardsService {
 	}
 
 	public CompletableFuture<User> calculateRewards(User user) {
-		CompletableFuture<User> producerFuture = null;
+		return calculateRewardsFutures.computeIfAbsent(user.getUserName(), k ->
+				CompletableFuture.supplyAsync(() -> computeRewards(user), rewardExecutor));
+	}
 
-		lock.readLock().lock();
-		try {
-			producerFuture = calculateRewardsFutures.get(user.getUserName());
-		} finally {
-			lock.readLock().unlock();
+	private User computeRewards(User user) {
+		VisitedLocation lastVisitedLocation = user.getLastVisitedLocation();
+		List<Attraction> attractions = getAttractionsCached();
+
+		final java.util.Set<String> rewardedAttractions = user.getUserRewards()
+				.stream()
+				.map(r -> r.attraction.attractionName)
+				.collect(java.util.stream.Collectors.toSet());
+
+		for (Attraction attraction : attractions) {
+			if (!rewardedAttractions.contains(attraction.attractionName)) {
+				if (nearAttraction(lastVisitedLocation, attraction)) {
+					int rewardPoints = getRewardPoints(attraction, user);
+					user.addUserReward(new UserReward(lastVisitedLocation, attraction, rewardPoints));
+				}
+			}
 		}
-		if (producerFuture != null) {
-			return producerFuture;
-		}
-
-		CompletableFuture<List<VisitedLocation>> userLocationFuture = CompletableFuture
-				.supplyAsync(user::getVisitedLocations, rewardExecutor);
-		CompletableFuture<List<Attraction>> attractionsFuture = CompletableFuture.supplyAsync(gpsUtil::getAttractions,
-				rewardExecutor);
-
-		producerFuture = userLocationFuture.thenCombineAsync(attractionsFuture,
-				(userLocations, attractions) -> {
-					userLocations
-							.parallelStream()
-							.forEach(visitedLocation -> {
-								attractions
-										.parallelStream().forEach(attraction -> {
-											if (user.getUserRewards()
-													.parallelStream()
-													.noneMatch(r -> r.attraction.attractionName
-															.equals(attraction.attractionName))) {
-												if (nearAttraction(visitedLocation, attraction)) {
-													int rewardPoints = getRewardPoints(attraction, user);
-													user.addUserReward(
-															new UserReward(visitedLocation, attraction, rewardPoints));
-												}
-											}
-										});
-							});
-					return user;
-				}, rewardExecutor);
-
-		lock.writeLock().lock();
-		try {
-			calculateRewardsFutures.put(user.getUserName(), producerFuture);
-		} finally {
-			lock.writeLock().unlock();
-		}
-		return producerFuture;
-
+		return user;
 	}
 
 	public Stream<User> usersWithUserRewardsStream() throws InterruptedException {
@@ -111,7 +107,16 @@ public class RewardsService {
 	}
 
 	private boolean nearAttraction(VisitedLocation visitedLocation, Attraction attraction) {
-		return getDistance(attraction, visitedLocation.location) > proximityBuffer ? false : true;
+		// Filtre rapide par boîte englobante en miles pour éviter les trigonométries coûteuses
+		final double buffer = proximityBuffer;
+		final double dLat = Math.abs(visitedLocation.location.latitude - attraction.latitude);
+		final double dLon = Math.abs(visitedLocation.location.longitude - attraction.longitude);
+		// ~69 miles par degré de latitude; longitude dépend de la latitude courante
+		final double milesPerDegLat = 69.0;
+		final double milesPerDegLon = 69.0 * Math.cos(Math.toRadians(visitedLocation.location.latitude));
+		if (dLat * milesPerDegLat > buffer) return false;
+		if (dLon * milesPerDegLon > buffer) return false;
+		return getDistance(attraction, visitedLocation.location) > buffer ? false : true;
 	}
 
 	private int getRewardPoints(Attraction attraction, User user) {

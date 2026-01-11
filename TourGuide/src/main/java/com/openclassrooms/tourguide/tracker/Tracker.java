@@ -20,9 +20,14 @@ public class Tracker extends Thread {
 	private boolean stop = false;
 
 	public Tracker(TourGuideService tourGuideService) {
-		this.tourGuideService = tourGuideService;
+		this(tourGuideService, true);
+	}
 
-		executorService.submit(this);
+	public Tracker(TourGuideService tourGuideService, boolean start) {
+		this.tourGuideService = tourGuideService;
+		if (start) {
+			executorService.submit(this);
+		}
 	}
 
 	/**
