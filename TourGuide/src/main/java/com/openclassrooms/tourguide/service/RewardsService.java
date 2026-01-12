@@ -83,14 +83,11 @@ public class RewardsService {
 				.map(r -> r.attraction.attractionName)
 				.collect(java.util.stream.Collectors.toSet());
 
-		for (Attraction attraction : attractions) {
-			if (!rewardedAttractions.contains(attraction.attractionName)) {
-				if (nearAttraction(lastVisitedLocation, attraction)) {
-					int rewardPoints = getRewardPoints(attraction, user);
-					user.addUserReward(new UserReward(lastVisitedLocation, attraction, rewardPoints));
-				}
-			}
-		}
+		attractions.stream()
+			.filter(attraction -> !rewardedAttractions.contains(attraction.attractionName))
+			.filter(attraction -> nearAttraction(lastVisitedLocation, attraction))
+			.map(attraction -> new UserReward(lastVisitedLocation, attraction, getRewardPoints(attraction, user)))
+			.forEach(user::addUserReward);
 		return user;
 	}
 
