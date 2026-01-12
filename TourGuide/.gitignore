@@ -1,0 +1,42 @@
+# Java
+*.class
+
+# Maven
+/target/
+pom.xml.versionsBackup
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+
+# Test reports & coverage
+/surefire-reports/
+jacoco.exec
+
+# IDEs
+# IntelliJ
+/.idea/
+*.iml
+*.ipr
+*.iws
+
+# Eclipse
+/.project
+/.classpath
+/.settings/
+/bin/
+
+# VS Code
+/.vscode/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+
+# Misc build outputs
+/out/

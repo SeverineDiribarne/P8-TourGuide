@@ -39,11 +39,11 @@ public class RewardsService {
 	public RewardsService(GpsUtil gpsUtil, RewardCentral rewardCentral) {
 		this.gpsUtil = gpsUtil;
 		this.rewardsCentral = rewardCentral;
-		// Pré-chargement du cache d'attractions pour éviter le coût à la première requête
+		// Preloading the attractions cache to avoid the cost of the first request
 		try {
 			this.attractionsCache = gpsUtil.getAttractions();
 		} catch (Exception ignored) {
-			// en cas d'échec, on retombera sur un chargement lazy au premier calcul
+			// if this fails, we will fall back to lazy loading on the first calculation
 		}
 	}
 
@@ -75,7 +75,6 @@ public class RewardsService {
 	}
 
 	private User computeRewards(User user) {
-		VisitedLocation lastVisitedLocation = user.getLastVisitedLocation();
 		List<Attraction> attractions = getAttractionsCached();
 
 		final java.util.Set<String> rewardedAttractions = user.getUserRewards()
@@ -83,11 +82,14 @@ public class RewardsService {
 				.map(r -> r.attraction.attractionName)
 				.collect(java.util.stream.Collectors.toSet());
 
-		attractions.stream()
-			.filter(attraction -> !rewardedAttractions.contains(attraction.attractionName))
-			.filter(attraction -> nearAttraction(lastVisitedLocation, attraction))
-			.map(attraction -> new UserReward(lastVisitedLocation, attraction, getRewardPoints(attraction, user)))
-			.forEach(user::addUserReward);
+		// Parcourt toutes les visites pour attribuer les récompenses correspondantes
+		for (VisitedLocation visitedLocation : user.getVisitedLocations()) {
+			attractions.stream()
+					.filter(attraction -> !rewardedAttractions.contains(attraction.attractionName))
+					.filter(attraction -> nearAttraction(visitedLocation, attraction))
+					.map(attraction -> new UserReward(visitedLocation, attraction, getRewardPoints(attraction, user)))
+					.forEach(user::addUserReward);
+		}
 		return user;
 	}
 
@@ -104,11 +106,11 @@ public class RewardsService {
 	}
 
 	private boolean nearAttraction(VisitedLocation visitedLocation, Attraction attraction) {
-		// Filtre rapide par boîte englobante en miles pour éviter les trigonométries coûteuses
+		// Fast filter by bounding box in miles to avoid costly trigonometry
 		final double buffer = proximityBuffer;
 		final double dLat = Math.abs(visitedLocation.location.latitude - attraction.latitude);
 		final double dLon = Math.abs(visitedLocation.location.longitude - attraction.longitude);
-		// ~69 miles par degré de latitude; longitude dépend de la latitude courante
+		// ~69 miles per degree of latitude; longitude depends on current latitude
 		final double milesPerDegLat = 69.0;
 		final double milesPerDegLon = 69.0 * Math.cos(Math.toRadians(visitedLocation.location.latitude));
 		if (dLat * milesPerDegLat > buffer) return false;

@@ -20,6 +20,7 @@ import java.util.stream.IntStream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import com.openclassrooms.tourguide.helper.InternalTestHelper;
@@ -47,6 +48,7 @@ public class TourGuideService {
 	private final Map<String, CompletableFuture<VisitedLocation>> trackUserLocationFutures = new HashMap<>();
 	private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
+	@Autowired
 	public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService) {
 		this(gpsUtil, rewardsService, true);
 	}
@@ -153,7 +155,7 @@ public class TourGuideService {
 		List<Attraction> nearbyAttractions = new ArrayList<>();
 		attractionToDistance.entrySet().stream()
 				.sorted(Map.Entry.comparingByValue())
-				.limit(5) // Limiter à 5 attractions
+				.limit(5) // Limit to 5 attractions
 				.forEach(entry -> nearbyAttractions.add(entry.getKey()));
 
 		return nearbyAttractions;
