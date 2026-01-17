@@ -14,7 +14,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -45,8 +45,7 @@ public class TourGuideService {
 	boolean testMode = true;
 	private final ExecutorService executorService = Executors.newFixedThreadPool(100);
 
-	private final Map<String, CompletableFuture<VisitedLocation>> trackUserLocationFutures = new HashMap<>();
-	private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+	private final ConcurrentHashMap<String, CompletableFuture<VisitedLocation>> trackUserLocationFutures = new ConcurrentHashMap<>();
 
 	@Autowired
 	public TourGuideService(GpsUtil gpsUtil, RewardsService rewardsService) {
@@ -110,37 +109,23 @@ public class TourGuideService {
 	}
 
 	public CompletableFuture<VisitedLocation> trackUserLocation(User user) {
-		boolean exist = false;
+		final String userName = user.getUserName();
+		return trackUserLocationFutures.computeIfAbsent(userName, key -> {
+			CompletableFuture<VisitedLocation> future = CompletableFuture.supplyAsync(() -> {
+				VisitedLocation visitedLocation = gpsUtil.getUserLocation(user.getUserId());
+				user.addToVisitedLocations(visitedLocation);
+				rewardsService.calculateRewards(user).join();
+				return visitedLocation;
+			}, executorService);
 
-		lock.readLock().lock();
-		try {
-			exist = trackUserLocationFutures.containsKey(user.getUserName());
-		} finally {
-			lock.readLock().unlock();
-		}
-		if (exist)
-			return trackUserLocationFutures.get(user.getUserName());
-
-		CompletableFuture<VisitedLocation> trackUserLocationFuture = CompletableFuture.supplyAsync(() -> {
-			VisitedLocation visitedLocation = gpsUtil.getUserLocation(user.getUserId());
-			user.addToVisitedLocations(visitedLocation);
-			rewardsService.calculateRewards(user).join();
-			return visitedLocation;
-		}, executorService);
-
-		lock.writeLock().lock();
-		try {
-			trackUserLocationFutures.put(user.getUserName(), trackUserLocationFuture);
-		} finally {
-			lock.writeLock().unlock();
-		}
-
-		return trackUserLocationFuture;
+			// Avoid memory leak: remove completed futures; also ensures a new request can re-trigger tracking.
+			future.whenComplete((result, error) -> trackUserLocationFutures.remove(key, future));
+			return future;
+		});
 	}
 
 	public void stopTrackUserLocation() {
-		trackUserLocationFutures
-				.values()
+		new ArrayList<>(trackUserLocationFutures.values())
 				.parallelStream()
 				.forEach(CompletableFuture::join);
 	}
