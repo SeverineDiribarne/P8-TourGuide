@@ -51,7 +51,7 @@ jobs:
         run: mvn -B -ntp package
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: build-artifacts
           path: TourGuide/target/*.jar
@@ -64,7 +64,7 @@ jobs:
 
       - name: Archive surefire reports
         if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.runPerformanceTests == 'true' }}
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: surefire-reports
           path: TourGuide/target/surefire-reports/**
