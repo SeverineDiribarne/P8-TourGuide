@@ -18,113 +18,53 @@ on:
  #   - cron: '0 0 * * *'
  #   - cron: '0 12 * * *'
   workflow_dispatch:
-  #  inputs:
-  #    runPerformanceTests:
-  #     description: "Exécuter les tests de performance (TestPerformance)"
-  #    required: false
-  #      default: "false"
+    inputs:
+      runPerformanceTests:
+        description: "Exécuter les tests de performance (TestPerformance)"
+        required: false
+        default: "false"
 
 jobs:
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    outputs:
-      perf: ${{ steps.filter.outputs.perf }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Paths filter
-        id: filter
-        uses: dorny/paths-filter@v3
-        with:
-          filters: |
-            perf:
-              - 'TourGuide/src/test/java/com/openclassrooms/tourguide/TestPerformance.java'
-              - 'TourGuide/src/main/java/com/openclassrooms/tourguide/service/TourGuideService.java'
-              - 'TourGuide/src/main/java/com/openclassrooms/tourguide/tracker/Tracker.java'
-              - 'TourGuide/src/main/java/com/openclassrooms/tourguide/service/RewardsService.java'
-
   build:
-
+    name: Build, Test (and optional Perf)
     runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-    - name: Set up JDK 17
-      uses: actions/setup-java@v3
-      with:
-        java-version: '17'
-        distribution: 'temurin'
-        cache: maven
-    - name: gpsUtil
-      run: mvn install:install-file -Dfile=libs/gpsUtil.jar -DgroupId=gpsUtil -DartifactId=gpsUtil -Dversion=1.0.0 -Dpackaging=jar
-      working-directory: TourGuide
-    - name: rewardCentral
-      run: mvn install:install-file -Dfile=libs/RewardCentral.jar -DgroupId=rewardCentral -DartifactId=rewardCentral -Dversion=1.0.0 -Dpackaging=jar
-      working-directory: TourGuide
-    - name: tripPricer 
-      run: mvn install:install-file -Dfile=libs/TripPricer.jar -DgroupId=tripPricer -DartifactId=tripPricer -Dversion=1.0.0 -Dpackaging=jar
-      working-directory: TourGuide
-
-    - name: Compile project with Maven
-      run: mvn compile
-      working-directory: TourGuide
-
-    - name: Run tests with Maven
-      run: mvn test
-      working-directory: TourGuide
-
-    - name: Package project with Maven
-      run: mvn package
-      working-directory: TourGuide
-
-    - name: Upload build atifacts
-      uses: actions/upload-artifact@v3
-      with:
-        name: build-artifacts
-        path: TourGuide/target/*.jar
-  perf-tests:
-    name: Performance Tests
-    runs-on: ubuntu-latest
-    needs: changes
-    # Job disabled: no longer runs performance tests.
-    if: false
-    # Automatic daily (schedule) or if performance-related files have changed
-    # if: ${{ github.event_name == 'schedule' || (github.event_name != 'schedule' && needs.changes.outputs.perf == 'true') || (github.event_name == 'workflow_dispatch' && github.event.inputs.runPerformanceTests == 'true') }}
+    defaults:
+      run:
+        working-directory: TourGuide
     steps:
       - uses: actions/checkout@v4
+
       - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: maven
-      - name: gpsUtil
-        run: mvn install:install-file -Dfile=libs/gpsUtil.jar -DgroupId=gpsUtil -DartifactId=gpsUtil -Dversion=1.0.0 -Dpackaging=jar
-        working-directory: TourGuide
-      - name: rewardCentral
-        run: mvn install:install-file -Dfile=libs/RewardCentral.jar -DgroupId=rewardCentral -DartifactId=rewardCentral -Dversion=1.0.0 -Dpackaging=jar
-        working-directory: TourGuide
-      - name: tripPricer 
-        run: mvn install:install-file -Dfile=libs/TripPricer.jar -DgroupId=tripPricer -DartifactId=tripPricer -Dversion=1.0.0 -Dpackaging=jar
-        working-directory: TourGuide
 
-      - name: Build (skip tests)
-        run: mvn -q -DskipTests compile
-        working-directory: TourGuide
+      - name: Install local libs
+        run: |
+          mvn install:install-file -Dfile=libs/gpsUtil.jar -DgroupId=gpsUtil -DartifactId=gpsUtil -Dversion=1.0.0 -Dpackaging=jar
+          mvn install:install-file -Dfile=libs/RewardCentral.jar -DgroupId=rewardCentral -DartifactId=rewardCentral -Dversion=1.0.0 -Dpackaging=jar
+          mvn install:install-file -Dfile=libs/TripPricer.jar -DgroupId=tripPricer -DartifactId=tripPricer -Dversion=1.0.0 -Dpackaging=jar
 
-      - name: Run Performance Tests (TestPerformance)
+      - name: Build, test and package
+        run: mvn -B -ntp package
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: TourGuide/target/*.jar
+
+      - name: Run Performance Tests (optional)
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.runPerformanceTests == 'true' }}
         env:
           MAVEN_OPTS: -Xmx2g
         run: mvn -Dtest=TestPerformance -Dsurefire.timeout=0 test
-        working-directory: TourGuide
 
       - name: Archive surefire reports
-        if: always()
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && github.event.inputs.runPerformanceTests == 'true' }}
         uses: actions/upload-artifact@v3
         with:
           name: surefire-reports
           path: TourGuide/target/surefire-reports/**
-
-    # Optional: Uploads the full dependency graph to GitHub to improve the quality of Dependabot alerts this repository can receive
-    #- name: Update dependency graph
-    #  uses: advanced-security/maven-dependency-submission-action@571e99aab1055c2e71a1e2309b9691de18d6b7d6
